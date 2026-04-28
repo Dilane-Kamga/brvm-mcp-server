@@ -173,6 +173,6 @@ MIT
 
 ---
 
-Built with ☕ in Mauritius by [Dilane Fogué Kamga](https://www.linkedin.com/in/dilane-fogue-kamga/) — Senior Software & AI Engineer, Financial Engineering MSc (WorldQuant University).
+Built with ☕ in Mauritius by [Dilane Fogué Kamga](https://www.linkedin.com/in/dilane-fogue-kamga/) — Senior Software & AI Engineer, Financial Engineering MSc ([WorldQuant University](https://www.wqu.edu/mscfe)).
 
 *Bridging AI and African capital markets.*
