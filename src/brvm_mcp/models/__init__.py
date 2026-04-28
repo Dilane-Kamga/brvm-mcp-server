@@ -30,7 +30,7 @@ class Sector(str, Enum):
 class StockQuote(BaseModel):
     """Real-time or end-of-day quote for a single ticker."""
 
-    ticker: str = Field(..., description="BRVM ticker symbol, e.g. SNTS, ONTC")
+    ticker: str = Field(..., description="BRVM ticker symbol, e.g. SNTS, ONTBF")
     name: str = Field(..., description="Full company name")
     price: float = Field(..., description="Last traded price in XOF")
     change: float = Field(0.0, description="Absolute price change vs previous close")

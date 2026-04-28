@@ -21,7 +21,6 @@ License: MIT
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import logging
 import sys
@@ -69,8 +68,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
 
 mcp = FastMCP(
     "BRVM Market Data",
-    version="0.1.0",
-    description=(
+    instructions=(
         "Live market data from the BRVM (Bourse Régionale des Valeurs Mobilières), "
         "the regional stock exchange of 8 West African UEMOA member states. "
         "Provides stock quotes, index values, top movers, company info, and market summaries."
@@ -109,7 +107,7 @@ async def get_stock_price(ticker: str) -> str:
 
     Args:
         ticker: The BRVM ticker symbol (e.g., SNTS for Sonatel, SGBC for Société Générale CI,
-                ETIT for Ecobank Transnational, ORAC for Orange CI, ONTC for Onatel).
+                ETIT for Ecobank Transnational, ORAC for Orange CI, ONTBF for Onatel).
 
     Returns a JSON object with price, change, volume, and company details.
     """
@@ -321,12 +319,17 @@ def main():
         default=8000,
         help="Port for HTTP transport (default: 8000)",
     )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host for HTTP transport (default: 0.0.0.0)",
+    )
     args = parser.parse_args()
 
     if args.transport == "streamable-http":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=args.port)
-    else:
-        mcp.run(transport="stdio")
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

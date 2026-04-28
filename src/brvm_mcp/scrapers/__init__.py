@@ -35,12 +35,14 @@ BRVM_BASE = "https://www.brvm.org"
 # Known BRVM tickers mapped to (full_name, country, sector)
 # This acts as a static enrichment layer; the scraper fills in live prices.
 TICKER_REGISTRY: dict[str, tuple[str, str, str]] = {
-    "ABJC": ("Abidjan Catering (SCA)", "Côte d'Ivoire", "Distribution"),
+    "ABJC": ("Servair Abidjan Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
+    "BICB": ("BIIC Bénin", "Bénin", "Services Financiers"),
     "BICC": ("BICI Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
     "BNBC": ("Bernabé Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
     "BOAB": ("Bank of Africa Bénin", "Bénin", "Services Financiers"),
     "BOABF": ("Bank of Africa Burkina Faso", "Burkina Faso", "Services Financiers"),
     "BOAC": ("Bank of Africa Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
+    "BOAM": ("Bank of Africa Mali", "Mali", "Services Financiers"),
     "BOAN": ("Bank of Africa Niger", "Niger", "Services Financiers"),
     "BOAS": ("Bank of Africa Sénégal", "Sénégal", "Services Financiers"),
     "CABC": ("Sicable Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
@@ -50,33 +52,36 @@ TICKER_REGISTRY: dict[str, tuple[str, str, str]] = {
     "ECOC": ("Ecobank Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
     "ETIT": ("Ecobank Transnational Inc.", "Togo", "Services Financiers"),
     "FTSC": ("Filtisac Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
+    "LNBB": ("Loterie Nationale du Bénin", "Bénin", "Distribution"),
     "NEIC": ("NEI-CEDA Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
     "NSBC": ("NSIA Banque Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
     "NTLC": ("Nestlé Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
-    "ONTC": ("Onatel Burkina Faso", "Burkina Faso", "Services Publics"),
+    "ONTBF": ("Onatel Burkina Faso", "Burkina Faso", "Services Publics"),
     "ORAC": ("Orange Côte d'Ivoire", "Côte d'Ivoire", "Services Publics"),
+    "ORGT": ("Oragroup Togo", "Togo", "Services Financiers"),
     "PALC": ("Palm Côte d'Ivoire", "Côte d'Ivoire", "Agriculture"),
     "PRSC": ("Tractafric Motors Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
     "SAFC": ("Safca Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
-    "SCRC": ("Sucrivoire", "Côte d'Ivoire", "Agriculture"),
+    "SCRC": ("Sucrivoire Côte d'Ivoire", "Côte d'Ivoire", "Agriculture"),
     "SDCC": ("SODE Côte d'Ivoire", "Côte d'Ivoire", "Services Publics"),
-    "SDSC": ("SDS Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
-    "SEMC": ("Crown SIEM Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
+    "SDSC": ("Bolloré Transport & Logistics", "Côte d'Ivoire", "Transport"),
+    "SEMC": ("Eviosys Packaging SIEM", "Côte d'Ivoire", "Industrie"),
     "SGBC": ("Société Générale CI", "Côte d'Ivoire", "Services Financiers"),
-    "SIBC": ("SIB Côte d'Ivoire", "Côte d'Ivoire", "Services Financiers"),
+    "SHEC": ("Vivo Energy Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
+    "SIBC": ("Société Ivoirienne de Banque", "Côte d'Ivoire", "Services Financiers"),
     "SICC": ("Sicor Côte d'Ivoire", "Côte d'Ivoire", "Agriculture"),
+    "SIVC": ("Air Liquide Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
     "SLBC": ("Solibra Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
     "SMBC": ("SMB Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
     "SNTS": ("Sonatel Sénégal", "Sénégal", "Services Publics"),
     "SOGC": ("Sogb Côte d'Ivoire", "Côte d'Ivoire", "Agriculture"),
     "SPHC": ("SAPH Côte d'Ivoire", "Côte d'Ivoire", "Agriculture"),
+    "STAC": ("Setao Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
     "STBC": ("Sitab Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
-    "SVOC": ("Movis Côte d'Ivoire", "Côte d'Ivoire", "Transport"),
     "TTLC": ("Total Énergies CI", "Côte d'Ivoire", "Distribution"),
     "TTLS": ("Total Énergies Sénégal", "Sénégal", "Distribution"),
     "UNLC": ("Unilever Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
     "UNXC": ("Uniwax Côte d'Ivoire", "Côte d'Ivoire", "Industrie"),
-    "VIVS": ("Vivo Energy Côte d'Ivoire", "Côte d'Ivoire", "Distribution"),
 }
 
 
@@ -108,34 +113,31 @@ class BRVMScraper:
         soup = BeautifulSoup(resp.text, "lxml")
 
         quotes: list[StockQuote] = []
-        table = soup.find("table", id="t-shares")
-        if not table:
-            # Fallback: find the main data table
-            table = soup.find("table")
+
+        # The stock table is inside <div class="t"> with columns:
+        # Ticker | Name | Volume | Price | Change (absolute)
+        wrapper = soup.find("div", class_="t")
+        table = wrapper.find("table") if wrapper else None
         if not table or not isinstance(table, Tag):
             logger.warning("Could not find shares table on afx page")
             return quotes
 
-        rows = table.find_all("tr")
-        for row in rows[1:]:  # skip header
+        for row in table.find_all("tr"):
             cells = row.find_all("td")
             if len(cells) < 5:
                 continue
 
             ticker_tag = cells[0].find("a")
             ticker = ticker_tag.get_text(strip=True) if ticker_tag else cells[0].get_text(strip=True)
-            name_raw = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+            name_raw = cells[1].get_text(strip=True)
 
-            # Parse numeric values safely
-            price = self._parse_number(cells[2].get_text(strip=True)) if len(cells) > 2 else 0.0
-            change_text = cells[3].get_text(strip=True) if len(cells) > 3 else "0"
-            volume = int(self._parse_number(cells[4].get_text(strip=True))) if len(cells) > 4 else 0
-            value_traded = self._parse_number(cells[5].get_text(strip=True)) if len(cells) > 5 else 0.0
+            volume = int(self._parse_number(cells[2].get_text(strip=True)))
+            price = self._parse_number(cells[3].get_text(strip=True))
+            change_abs = self._parse_number(cells[4].get_text(strip=True))
 
-            change_pct = self._parse_number(change_text.replace("%", ""))
-            change_abs = price * change_pct / 100 if change_pct else 0.0
+            previous_close = price - change_abs
+            change_pct = round((change_abs / previous_close) * 100, 2) if previous_close else 0.0
 
-            # Enrich from registry
             registry_info = TICKER_REGISTRY.get(ticker, (name_raw, "", ""))
 
             quotes.append(
@@ -143,11 +145,10 @@ class BRVMScraper:
                     ticker=ticker,
                     name=registry_info[0] or name_raw,
                     price=price,
-                    change=round(change_abs, 2),
+                    change=change_abs,
                     change_pct=change_pct,
                     volume=volume,
-                    value_traded=value_traded,
-                    previous_close=round(price - change_abs, 2) if change_abs else price,
+                    previous_close=round(previous_close, 2),
                     country=registry_info[1],
                     sector=registry_info[2],
                     as_of=datetime.now().isoformat(timespec="minutes"),
@@ -170,65 +171,58 @@ class BRVMScraper:
         resp = await self._client.get(f"{AFX_BASE}/")
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
+        now = datetime.now().isoformat(timespec="minutes")
 
         indices: list[IndexValue] = []
 
-        # Look for index data — typically in a summary section or separate table
-        # AFX displays indices in a paragraph or small table near the top
-        summary_text = soup.get_text()
+        # 1) BRVM-CI from the summary table at top:
+        #    <th>BRVM-CI Index | Year-to-Date | Market Cap.
+        #    <td>402.59 (+0.59) | +56.84 (16.44%) | XOF 15.51Tr
+        for table in soup.find_all("table"):
+            th = table.find("th")
+            if th and "BRVM-CI" in th.get_text():
+                cells = table.find_all("td")
+                if len(cells) >= 2:
+                    ci_text = cells[0].get_text(strip=True)
+                    ytd_text = cells[1].get_text(strip=True)
+                    val_m = re.match(r"([\d.,]+)", ci_text)
+                    chg_m = re.search(r"\(([+-]?[\d.,]+)\)", ci_text)
+                    ytd_m = re.search(r"\(([\d.,]+)%\)", ytd_text)
+                    if val_m:
+                        value = self._parse_number(val_m.group(1))
+                        change = self._parse_number(chg_m.group(1)) if chg_m else 0.0
+                        change_pct = round((change / (value - change)) * 100, 2) if (value - change) else 0.0
+                        ytd_pct = self._parse_number(ytd_m.group(1)) if ytd_m else None
+                        indices.append(IndexValue(
+                            name="BRVM Composite",
+                            value=value,
+                            change=change,
+                            change_pct=change_pct,
+                            ytd_change_pct=ytd_pct,
+                            as_of=now,
+                        ))
+                break
 
-        # Parse index patterns like "BRVM Composite: 402.52 (+0.67%)"
-        index_patterns = [
-            ("BRVM Composite", r"BRVM[- ]?C(?:omposite|I)\D*?([\d,.]+)"),
-            ("BRVM 30", r"BRVM[- ]?30\D*?([\d,.]+)"),
-            ("BRVM Prestige", r"BRVM[- ]?Prestige\D*?([\d,.]+)"),
-            ("BRVM Principal", r"BRVM[- ]?Principal\D*?([\d,.]+)"),
+        # 2) Other indices from the trading summary paragraph:
+        #    "BRVM 30 (+0.17%; +1.3% 1WK; +14.18% YTD)"
+        full_text = soup.get_text()
+        other_patterns = [
+            ("BRVM 30", r"BRVM\s*30\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
+            ("BRVM Prestige", r"BRVM\s*Prestige\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
+            ("BRVM Principal", r"BRVM\s*Principal\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
         ]
-
-        for name, pattern in index_patterns:
-            match = re.search(pattern, summary_text, re.IGNORECASE)
-            if match:
-                value = self._parse_number(match.group(1))
-                # Try to find the change percentage nearby
-                change_match = re.search(
-                    rf"{re.escape(name)}.*?([+-]?\d+[.,]?\d*)%",
-                    summary_text,
-                    re.IGNORECASE,
-                )
-                change_pct = self._parse_number(change_match.group(1)) if change_match else 0.0
-                indices.append(
-                    IndexValue(
-                        name=name,
-                        value=value,
-                        change=round(value * change_pct / 100, 2),
-                        change_pct=change_pct,
-                        as_of=datetime.now().isoformat(timespec="minutes"),
-                    )
-                )
-
-        # If regex approach didn't work, try table-based parsing
-        if not indices:
-            for table in soup.find_all("table"):
-                header_text = table.get_text().lower()
-                if "composite" in header_text or "indice" in header_text:
-                    for row in table.find_all("tr")[1:]:
-                        cells = row.find_all("td")
-                        if len(cells) >= 3:
-                            idx_name = cells[0].get_text(strip=True)
-                            idx_value = self._parse_number(cells[1].get_text(strip=True))
-                            idx_change = self._parse_number(
-                                cells[2].get_text(strip=True).replace("%", "")
-                            )
-                            indices.append(
-                                IndexValue(
-                                    name=idx_name,
-                                    value=idx_value,
-                                    change_pct=idx_change,
-                                    change=round(idx_value * idx_change / 100, 2),
-                                    as_of=datetime.now().isoformat(timespec="minutes"),
-                                )
-                            )
-                    break
+        for name, pattern in other_patterns:
+            m = re.search(pattern, full_text, re.IGNORECASE)
+            if m:
+                change_pct = self._parse_number(m.group(1))
+                ytd_pct = self._parse_number(m.group(2))
+                indices.append(IndexValue(
+                    name=name,
+                    value=0.0,
+                    change_pct=change_pct,
+                    ytd_change_pct=ytd_pct,
+                    as_of=now,
+                ))
 
         logger.info(f"Scraped {len(indices)} indices")
         return indices
@@ -237,6 +231,10 @@ class BRVMScraper:
 
     async def get_market_summary(self) -> MarketSummary:
         """Build a full market summary from scraped data."""
+        resp = await self._client.get(f"{AFX_BASE}/")
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
         quotes = await self.get_all_quotes()
         indices = await self.get_indices()
 
@@ -244,11 +242,32 @@ class BRVMScraper:
         losers = [q for q in quotes if q.change_pct < 0]
         unchanged = [q for q in quotes if q.change_pct == 0]
 
+        # Parse market cap from the summary table ("XOF 15.51Tr")
+        market_cap = 0.0
+        for table in soup.find_all("table"):
+            th = table.find("th")
+            if th and "BRVM-CI" in th.get_text():
+                cells = table.find_all("td")
+                if len(cells) >= 3:
+                    cap_text = cells[2].get_text(strip=True)
+                    cap_m = re.search(r"([\d.,]+)\s*Tr", cap_text)
+                    if cap_m:
+                        market_cap = self._parse_number(cap_m.group(1)) * 1e12
+                break
+
+        # Parse total volume/value from trading summary paragraph
+        full_text = soup.get_text()
+        total_volume = sum(q.volume for q in quotes)
+        total_value = 0.0
+        val_m = re.search(r"XOF\s*([\d,. ]+)", full_text)
+        if val_m:
+            total_value = self._parse_number(val_m.group(1))
+
         return MarketSummary(
             date=datetime.now().strftime("%Y-%m-%d"),
-            total_volume=sum(q.volume for q in quotes),
-            total_value=sum(q.value_traded for q in quotes),
-            market_cap=sum(q.market_cap or 0 for q in quotes),
+            total_volume=total_volume,
+            total_value=total_value,
+            market_cap=market_cap,
             gainers=len(gainers),
             losers=len(losers),
             unchanged=len(unchanged),
@@ -335,11 +354,20 @@ class BRVMScraper:
 
     @staticmethod
     def _parse_number(text: str) -> float:
-        """Parse a number from text, handling French formatting (space separators, commas)."""
+        """Parse a number handling both English (1,234.56) and French (1 234,56) formatting."""
         if not text:
             return 0.0
-        cleaned = text.strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
-        cleaned = re.sub(r"[^\d.\-+]", "", cleaned)
+        cleaned = text.strip().replace("\xa0", "").replace(" ", "")
+        cleaned = re.sub(r"[^\d.,\-+]", "", cleaned)
+        if not cleaned or cleaned in ("+", "-", ".", ","):
+            return 0.0
+        if "," in cleaned and "." in cleaned:
+            cleaned = cleaned.replace(",", "")
+        elif "," in cleaned:
+            if re.fullmatch(r"[+-]?\d{1,3}(,\d{3})+", cleaned):
+                cleaned = cleaned.replace(",", "")
+            else:
+                cleaned = cleaned.replace(",", ".")
         try:
             return float(cleaned)
         except ValueError:
