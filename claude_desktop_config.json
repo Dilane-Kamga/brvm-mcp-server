@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "brvm": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/brvm-mcp-server",
+        "brvm-mcp"
+      ]
+    }
+  }
+}
