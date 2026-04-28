@@ -12,6 +12,7 @@ of source servers and to provide fast responses to MCP tool calls.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime
@@ -88,6 +89,9 @@ TICKER_REGISTRY: dict[str, tuple[str, str, str]] = {
 class BRVMScraper:
     """Async scraper for BRVM market data."""
 
+    MAX_RETRIES = 3
+    RETRY_BACKOFF = (1.0, 2.0, 4.0)
+
     def __init__(self, timeout: float = 30.0):
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -101,6 +105,20 @@ class BRVMScraper:
             follow_redirects=True,
         )
 
+    async def _get_with_retry(self, url: str) -> httpx.Response:
+        """GET with exponential backoff on 429/5xx."""
+        for attempt in range(self.MAX_RETRIES):
+            resp = await self._client.get(url)
+            if resp.status_code == 429 or resp.status_code >= 500:
+                if attempt < self.MAX_RETRIES - 1:
+                    delay = self.RETRY_BACKOFF[attempt]
+                    logger.warning(f"HTTP {resp.status_code} on {url}, retrying in {delay}s")
+                    await asyncio.sleep(delay)
+                    continue
+            resp.raise_for_status()
+            return resp
+        return resp  # unreachable, but satisfies type checker
+
     async def close(self):
         await self._client.aclose()
 
@@ -108,8 +126,7 @@ class BRVMScraper:
 
     async def get_all_quotes(self) -> list[StockQuote]:
         """Scrape all live stock quotes from afx.kwayisi.org/brvm/."""
-        resp = await self._client.get(f"{AFX_BASE}/")
-        resp.raise_for_status()
+        resp = await self._get_with_retry(f"{AFX_BASE}/")
         soup = BeautifulSoup(resp.text, "lxml")
 
         quotes: list[StockQuote] = []
@@ -168,8 +185,7 @@ class BRVMScraper:
 
     async def get_indices(self) -> list[IndexValue]:
         """Scrape current BRVM index values."""
-        resp = await self._client.get(f"{AFX_BASE}/")
-        resp.raise_for_status()
+        resp = await self._get_with_retry(f"{AFX_BASE}/")
         soup = BeautifulSoup(resp.text, "lxml")
         now = datetime.now().isoformat(timespec="minutes")
 
@@ -231,8 +247,7 @@ class BRVMScraper:
 
     async def get_market_summary(self) -> MarketSummary:
         """Build a full market summary from scraped data."""
-        resp = await self._client.get(f"{AFX_BASE}/")
-        resp.raise_for_status()
+        resp = await self._get_with_retry(f"{AFX_BASE}/")
         soup = BeautifulSoup(resp.text, "lxml")
 
         quotes = await self.get_all_quotes()
