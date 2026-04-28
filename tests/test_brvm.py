@@ -60,6 +60,14 @@ class TestNumberParser:
     def test_nbsp(self):
         assert BRVMScraper._parse_number("15\xa0000") == 15000.0
 
+    def test_english_thousands(self):
+        assert BRVMScraper._parse_number("3,262") == 3262.0
+        assert BRVMScraper._parse_number("1,018,483") == 1018483.0
+        assert BRVMScraper._parse_number("-1,330") == -1330.0
+
+    def test_mixed_format(self):
+        assert BRVMScraper._parse_number("1,234.56") == 1234.56
+
 
 class TestSearchStocks:
     """Test the stock search functionality."""
