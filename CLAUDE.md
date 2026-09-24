@@ -70,6 +70,20 @@ everything *and* have real uptime problems, so it was dropped entirely — see t
 `scrapers/__init__.py` module docstring for the full story before reintroducing any
 third-party mirror as a source.
 
+## Secondary data source (per-ticker enrichment)
+
+`scrapers/sikafinance.py` adds fields brvm.org and the BOC simply don't have:
+1-year Beta, 14-day RSI, % of share capital traded, a self-reported investor
+sentiment poll (buy/sell/hold votes), and a dated news headline feed — see
+`get_sika_stock_page`/`get_sika_news`.
+
+Not every ticker is covered (Sikafinance is strongest on the more liquid
+names) — a 404/empty result means "no coverage," not a scraper bug. Some
+headlines link to paywalled "Sika Premium" analysis (`is_premium: true`);
+the scraper only ever reads the free headline, never logs in or pays —
+the headline itself is meant to be used as a web-search query for
+independent coverage of the same story.
+
 ## MCP design decisions
 
 - **7 tools**, under Anthropic's recommended limit of 20 per server
