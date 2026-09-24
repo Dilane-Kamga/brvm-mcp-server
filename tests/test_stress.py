@@ -73,15 +73,15 @@ class TestScraperConcurrency:
         await asyncio.sleep(3)
         scraper = BRVMScraper()
         try:
-            original_base = "https://afx.kwayisi.org/brvm"
+            original_base = "https://www.brvm.org"
             import brvm_mcp.scrapers as mod
-            mod.AFX_BASE = "https://afx.kwayisi.org/nonexistent"
+            mod.BRVM_BASE = "https://www.brvm.org/nonexistent-path"
             try:
                 await scraper.get_all_quotes()
             except httpx.HTTPStatusError:
                 pass
 
-            mod.AFX_BASE = original_base
+            mod.BRVM_BASE = original_base
             quotes = await scraper.get_all_quotes()
             assert len(quotes) > 40, "Scraper should recover after an error"
             print(f"\n  Scraper recovered after HTTP error: {len(quotes)} quotes")
@@ -162,17 +162,16 @@ class TestParserResilience:
         asyncio.run(_run())
 
     def test_html_malformed_cells(self):
-        """Scraper should skip rows with missing or garbage cells."""
+        """Scraper should skip ticker-tape items with too few fields, and
+        tolerate garbage numeric text by parsing it as 0 rather than crashing."""
         from unittest.mock import patch, MagicMock
 
         html = """<html><body>
-        <div class="t"><table>
-        <thead><tr><th>Ticker<th>Name<th>Volume<th>Price<th>Change</thead>
-        <tbody>
-        <tr><td><a href=#>TEST</a><td>Test Co<td>abc<td>xyz<td>???
-        <tr><td><a href=#>GOOD</a><td>Good Co<td>1,000<td>500<td>+10
-        <tr><td colspan=5>spacer row
-        </tbody></table></div>
+        <section id="slide-seance">
+          <div class="item"><span>TEST</span>&nbsp;<span>abc</span>&nbsp;<span>???</span></div>
+          <div class="item"><span>GOOD</span>&nbsp;<span>500</span>&nbsp;<span>10</span></div>
+          <div class="item"><span>ONLY</span>&nbsp;<span>100</span></div>
+        </section>
         </body></html>"""
 
         async def _run():
@@ -181,11 +180,11 @@ class TestParserResilience:
             mock_resp.text = html
             with patch.object(scraper, "_get_with_retry", return_value=mock_resp):
                 quotes = await scraper.get_all_quotes()
-                assert len(quotes) == 2, f"Expected 2 quotes (incl garbage row), got {len(quotes)}"
+                assert len(quotes) == 2, f"Expected 2 quotes (ONLY has too few fields), got {len(quotes)}"
                 good = [q for q in quotes if q.ticker == "GOOD"]
                 assert len(good) == 1
                 assert good[0].price == 500.0
-                assert good[0].change == 10.0
+                assert good[0].change_pct == 10.0
             await scraper.close()
 
         asyncio.run(_run())

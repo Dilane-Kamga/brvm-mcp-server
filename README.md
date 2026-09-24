@@ -128,18 +128,25 @@ Once connected, you can ask Claude:
                                               └────────┬─────────┘
                                                        │ httpx
                                               ┌────────▼─────────┐
-                                              │  Data Sources    │
-                                              │  • afx.kwayisi   │
-                                              │  • brvm.org      │
-                                              │  • Rich Bourse   │
+                                              │   brvm.org       │
+                                              │ • Homepage (same-│
+                                              │   day price/idx) │
+                                              │ • BOC PDF (volume│
+                                              │   /YTD/Principal,│
+                                              │   1h cache)      │
                                               └──────────────────┘
 ```
 
 - **FastMCP**: Decorator-based MCP framework (official Python SDK)
 - **httpx**: Async HTTP client for scraping
 - **BeautifulSoup4 + lxml**: HTML parsing
+- **pdfplumber**: BOC PDF parsing (index summary regex + per-stock table extraction)
 - **diskcache**: TTL-based disk caching (5min default, respectful of sources)
 - **Pydantic**: Structured data models
+
+Everything is sourced from the exchange's own site (`brvm.org`) — no third-party
+mirror. An earlier version scraped `afx.kwayisi.org` as primary; it lagged a full
+trading session on every field and had real uptime problems, so it was dropped.
 
 ## Roadmap
 
