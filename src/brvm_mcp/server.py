@@ -30,7 +30,8 @@ from typing import AsyncIterator
 from mcp.server.fastmcp import FastMCP
 
 from brvm_mcp.cache import BRVMCache
-from brvm_mcp.scrapers import BRVMScraper
+from brvm_mcp.scrapers import TICKER_REGISTRY, BRVMScraper
+from brvm_mcp.scrapers.sikafinance import SikaFinanceScraper
 
 # ── Logging ──────────────────────────────────────────────────────
 
@@ -44,14 +45,16 @@ logger = logging.getLogger("brvm-mcp")
 # ── Lifespan (startup / shutdown) ────────────────────────────────
 
 scraper: BRVMScraper | None = None
+sika_scraper: SikaFinanceScraper | None = None
 cache: BRVMCache | None = None
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     """Initialize scraper and cache on startup, clean up on shutdown."""
-    global scraper, cache
+    global scraper, sika_scraper, cache
     scraper = BRVMScraper()
+    sika_scraper = SikaFinanceScraper()
     cache = BRVMCache()
     logger.info("BRVM MCP Server started — scraper and cache initialized")
     try:
@@ -59,6 +62,8 @@ async def lifespan(server: FastMCP) -> AsyncIterator[None]:
     finally:
         if scraper:
             await scraper.close()
+        if sika_scraper:
+            await sika_scraper.close()
         if cache:
             cache.close()
         logger.info("BRVM MCP Server shut down")
@@ -249,6 +254,97 @@ async def list_tickers() -> str:
         for t, info in sorted(TICKER_REGISTRY.items())
     ]
     return json.dumps(tickers, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def get_sika_stock_page(ticker: str) -> str:
+    """
+    Get a BRVM stock's Sikafinance page: fields brvm.org/the BOC don't have —
+    1-year Beta, 14-day RSI, % of share capital traded today, market cap,
+    high/low/change over 1 week / 1 month / YTD / 1-3-5 years, dividend
+    history with computed yields, the ~8 most recent news headlines, and a
+    self-reported investor sentiment poll (buy/sell/hold vote counts).
+
+    Prices are ~15-minute delayed (Sikafinance's own disclaimer) — for the
+    authoritative end-of-day print use get_stock_price instead.
+
+    Args:
+        ticker: The BRVM ticker symbol (e.g., CBIBF, BICB, SLBC).
+
+    Returns a JSON object, or an error if this ticker has no Sikafinance page.
+    """
+    assert sika_scraper and cache
+    ticker = ticker.upper().strip()
+
+    info = TICKER_REGISTRY.get(ticker)
+    if not info:
+        return json.dumps(
+            {"error": f"Ticker '{ticker}' not in the BRVM registry. Use search_stocks."}
+        )
+    country = info[1]
+
+    cache_key = f"sika_page:{ticker}"
+    cached = cache.get(cache_key)
+    if cached:
+        return json.dumps(cached, ensure_ascii=False, indent=2)
+
+    try:
+        page = await sika_scraper.get_stock_page(ticker, country)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    if not page:
+        return json.dumps(
+            {"error": f"Sikafinance has no page for '{ticker}' (uncovered, or lookup failed)."}
+        )
+
+    data = page.model_dump()
+    cache.set(cache_key, data)
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def get_sika_news(ticker: str, n: int = 15) -> str:
+    """
+    Get a BRVM stock's full dated news headline feed from Sikafinance
+    (more complete, with timestamps, than the short list in
+    get_sika_stock_page — useful for scanning a ticker's news history or
+    spotting the date of a specific event).
+
+    Some headlines link to paywalled "Sika Premium" analysis pieces
+    (is_premium: true) — this tool never fetches or pays for that content,
+    only the free headline. Use a headline as a search query with a general
+    web search tool to find independent coverage of the same story.
+
+    Args:
+        ticker: The BRVM ticker symbol (e.g., CBIBF, BICB, SLBC).
+        n: Max number of headlines to return (default 15, max 50).
+
+    Returns a JSON array of {date, title, url, is_premium} objects.
+    """
+    assert sika_scraper and cache
+    ticker = ticker.upper().strip()
+    n = min(max(n, 1), 50)
+
+    info = TICKER_REGISTRY.get(ticker)
+    if not info:
+        return json.dumps(
+            {"error": f"Ticker '{ticker}' not in the BRVM registry. Use search_stocks."}
+        )
+    country = info[1]
+
+    cache_key = f"sika_news:{ticker}:{n}"
+    cached = cache.get(cache_key)
+    if cached:
+        return json.dumps(cached, ensure_ascii=False, indent=2)
+
+    try:
+        news = await sika_scraper.get_news(ticker, country, limit=n)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    data = [item.model_dump() for item in news]
+    cache.set(cache_key, data)
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 # ── Resources ────────────────────────────────────────────────────
