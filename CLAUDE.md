@@ -12,6 +12,7 @@ This is a **portfolio piece** for an Anthropic Forward Deployed Engineer applica
 - **FastMCP** (mcp SDK ≥1.27.0) — decorator-based MCP framework
 - **httpx** — async HTTP client for scraping
 - **BeautifulSoup4 + lxml** — HTML parsing
+- **pdfplumber** — BOC PDF parsing (text regex + table extraction)
 - **Pydantic v2** — data models
 - **diskcache** — TTL-based caching (5min default)
 - **pytest + pytest-asyncio** — testing
@@ -44,10 +45,30 @@ uv run mypy src/                           # Type check
 
 ## Primary data source
 
-- **afx.kwayisi.org/brvm/** — HTML page with live BRVM quotes, indices, trading summaries
-- No official BRVM API exists; we scrape responsibly (polite User-Agent, 5min cache TTL)
-- The HTML structure of afx may change — the scraper needs to be resilient and tested against the real page
-- The `TICKER_REGISTRY` in `scrapers/__init__.py` is a static enrichment layer (company names, countries, sectors)
+Everything is sourced from **brvm.org** (the exchange's own site), across two pages:
+
+- **Homepage** (`https://www.brvm.org/`) — same-day ticker tape (`#slide-seance`) and
+  "Activités du marché" widget (`#block-tools-activites-marche`): price, change %,
+  market cap, transaction value, and BRVM Composite/30/Prestige value+change %.
+- **Bulletin Officiel de la Cote (BOC) PDF** (`/fr/bulletins-officiels-de-la-cote`,
+  linked as `boc_YYYYMMDD_2.pdf`) — per-stock volume, index YTD %, and the BRVM
+  Principal index. Parsed with `pdfplumber` (text regex for the index summary,
+  `extract_tables()` for the per-stock table), cached 1h since it only updates once
+  a day. This PDF lags one trading session — that's the nature of the bulletin, not
+  a bug, so those 3 fields are always one session behind the homepage-sourced ones.
+
+No official BRVM API exists; we scrape responsibly (polite User-Agent, 5min tool-level
+cache TTL, 1h BOC cache). The HTML/PDF structure may change — the scraper needs to be
+resilient and tested against the real page/PDF, not just fixtures.
+
+The `TICKER_REGISTRY` in `scrapers/__init__.py` is a static enrichment layer (company
+names, countries, sectors) — the exchange's pages don't carry full company names.
+
+**History**: this used to scrape `afx.kwayisi.org/brvm/` as primary, with brvm.org as
+an unused "fallback" in name only. kwayisi turned out to lag a full trading session on
+everything *and* have real uptime problems, so it was dropped entirely — see the
+`scrapers/__init__.py` module docstring for the full story before reintroducing any
+third-party mirror as a source.
 
 ## MCP design decisions
 
@@ -69,11 +90,16 @@ uv run mypy src/                           # Type check
 
 ## When editing the scraper
 
-- The afx.kwayisi.org HTML structure is the source of truth — always `curl https://afx.kwayisi.org/brvm/` and inspect the actual HTML before adjusting selectors
+- The real brvm.org homepage HTML and the latest BOC PDF are the source of truth —
+  `curl https://www.brvm.org/` and download the latest `boc_*.pdf` from
+  `/fr/bulletins-officiels-de-la-cote` before adjusting selectors or regexes
 - Number parsing must handle French formatting: `1 234,56` (space thousands separator, comma decimal)
 - Non-breaking spaces (`\xa0`) are common in French financial data
-- The scraper should never crash on unexpected HTML — return empty results and log warnings
+- The scraper should never crash on unexpected HTML/PDF — return empty results and log warnings
 - Test with real network calls, then add VCR cassettes for offline CI
+- The BOC PDF's per-stock table is parsed via `pdfplumber.extract_tables()`, not raw
+  text — the sector-code column wraps to its own line in plain text extraction, which
+  breaks naive regex parsing; structured table extraction handles it correctly
 
 ## When adding new tools
 
