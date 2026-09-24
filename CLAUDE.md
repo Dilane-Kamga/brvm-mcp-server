@@ -84,6 +84,14 @@ the scraper only ever reads the free headline, never logs in or pays —
 the headline itself is meant to be used as a web-search query for
 independent coverage of the same story.
 
+The same module also exposes the market-wide regulatory filings feed
+(`get_brvm_filings`/`search_brvm_filings`/`download_brvm_filing`): every
+issuer's recent activity reports, financial statements, dividend notices,
+listing suspensions, and financial ratings, each with a direct PDF link.
+This is a separate, unscoped feed (not tied to one ticker) — `download_brvm_filing`
+only ever fetches a `pdf_url` this scraper itself returned, never an
+arbitrary link.
+
 ## MCP design decisions
 
 - **7 tools**, under Anthropic's recommended limit of 20 per server

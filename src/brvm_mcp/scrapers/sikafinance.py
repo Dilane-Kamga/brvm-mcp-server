@@ -28,13 +28,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from urllib.parse import urljoin
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
 
 from brvm_mcp.models import (
     SikaDividendEntry,
+    SikaFiling,
     SikaHistoricalRange,
     SikaNewsItem,
     SikaSentiment,
@@ -44,6 +46,7 @@ from brvm_mcp.models import (
 logger = logging.getLogger(__name__)
 
 SIKA_BASE = "https://www.sikafinance.com"
+FILINGS_URL = f"{SIKA_BASE}/marches/communiques_brvm"
 
 # Sikafinance URLs suffix the ticker with the listing country's ISO-2 code,
 # e.g. cotation_CBIBF.bf, cotation_BICB.bj, cotation_SLBC.ci — not the
@@ -305,3 +308,63 @@ class SikaFinanceScraper:
         if not container:
             return []
         return self._parse_news_block(container, SIKA_BASE)[:limit]
+
+    async def get_filings(self, limit: int = 50) -> list[SikaFiling]:
+        """Fetch the market-wide regulatory filings feed (communiqués BRVM):
+        every issuer's recent official documents (activity reports, financial
+        statements, dividend notices, listing suspensions, etc.), each with a
+        direct PDF link. Not scoped to one ticker — covers the whole exchange.
+
+        The page renders its full current list server-side (no pagination
+        params observed); `limit` just caps how many rows are returned.
+        """
+        resp = await self._get(FILINGS_URL)
+        if resp is None:
+            return []
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        table = soup.select_one("table.tablesorter")
+        if not table:
+            return []
+
+        filings: list[SikaFiling] = []
+        for row in table.select("tbody tr"):
+            cells = row.find_all("td")
+            if len(cells) != 2:
+                continue
+            date = cells[0].get_text(strip=True)
+            anchor = cells[1].find("a")
+            if not anchor or not anchor.get("href"):
+                continue
+            label = anchor.get_text(strip=True)
+            issuer, _, title = label.partition(" _ ")
+            filings.append(
+                SikaFiling(
+                    date=date,
+                    issuer=issuer.strip() or label,
+                    title=title.strip() or label,
+                    pdf_url=urljoin(SIKA_BASE, anchor["href"]),
+                )
+            )
+            if len(filings) >= limit:
+                break
+        return filings
+
+    async def download_filing(self, pdf_url: str, dest_dir: str) -> str:
+        """Download one filing PDF to dest_dir, named after its URL slug.
+        Returns the local file path. Raises on a non-2xx response or if
+        pdf_url isn't hosted on sikafinance.com (this method is only for
+        filings this scraper itself found, not an arbitrary URL fetcher)."""
+        parsed = urlparse(pdf_url)
+        if not parsed.netloc.endswith("sikafinance.com"):
+            raise ValueError(f"Refusing to fetch a non-sikafinance.com URL: {pdf_url}")
+
+        resp = await self._get(pdf_url)
+        if resp is None:
+            raise ValueError(f"Filing not found (404): {pdf_url}")
+
+        Path(dest_dir).mkdir(parents=True, exist_ok=True)
+        filename = Path(parsed.path).name or "filing.pdf"
+        dest_path = Path(dest_dir) / filename
+        dest_path.write_bytes(resp.content)
+        return str(dest_path)

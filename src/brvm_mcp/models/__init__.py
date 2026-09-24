@@ -177,3 +177,12 @@ class SikaStockPage(BaseModel):
     sentiment: SikaSentiment | None = None
     source_url: str = ""
 
+
+class SikaFiling(BaseModel):
+    """One row from Sikafinance's market-wide regulatory filings feed
+    (communiqués BRVM) — not scoped to a single ticker."""
+
+    date: str = Field(..., description="Publication date, e.g. '17/09/2026'")
+    issuer: str = Field(..., description="Issuer name as printed before the ' _ ' separator")
+    title: str = Field(..., description="Document title, e.g. 'Rapport d'activités - S1 2026'")
+    pdf_url: str = Field(..., description="Direct URL to the filing PDF")

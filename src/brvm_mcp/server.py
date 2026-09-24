@@ -25,6 +25,7 @@ import json
 import logging
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from mcp.server.fastmcp import FastMCP
@@ -345,6 +346,91 @@ async def get_sika_news(ticker: str, n: int = 15) -> str:
     data = [item.model_dump() for item in news]
     cache.set(cache_key, data)
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def get_brvm_filings(n: int = 30) -> str:
+    """
+    Get the market-wide BRVM regulatory filings feed from Sikafinance
+    (communiqués BRVM): every issuer's recent official documents — activity
+    reports, financial statements, dividend notices, listing suspensions,
+    financial ratings, AGM notices, etc. — each with a direct PDF link.
+
+    Not scoped to one ticker; covers the whole exchange. Use
+    search_brvm_filings instead if you're looking for a specific
+    company or document type.
+
+    Args:
+        n: Max number of filings to return, most recent first (default 30, max 50).
+
+    Returns a JSON array of {date, issuer, title, pdf_url} objects.
+    """
+    assert sika_scraper and cache
+    n = min(max(n, 1), 50)
+
+    cache_key = f"sika_filings:{n}"
+    cached = cache.get(cache_key)
+    if cached:
+        return json.dumps(cached, ensure_ascii=False, indent=2)
+
+    filings = await sika_scraper.get_filings(limit=n)
+    data = [f.model_dump() for f in filings]
+    cache.set(cache_key, data)
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def search_brvm_filings(query: str, n: int = 50) -> str:
+    """
+    Search the market-wide BRVM filings feed (see get_brvm_filings) by a
+    free-text match against the issuer name or document title — e.g.
+    'dividende', 'suspension', 'ECOBANK', 'rapport d'activités'.
+
+    This searches titles/issuer names only, not the PDF contents — it
+    won't find a filing whose title doesn't mention your query even if
+    the document body does.
+
+    Args:
+        query: Case-insensitive substring to match (required).
+        n: Max number of feed rows to scan before searching (default 50, the
+           feed's practical size — raise only if you know it has grown).
+
+    Returns a JSON array of matching {date, issuer, title, pdf_url} objects.
+    """
+    assert sika_scraper
+    if not query.strip():
+        return json.dumps({"error": "query must not be empty."})
+
+    n = min(max(n, 1), 200)
+    filings = await sika_scraper.get_filings(limit=n)
+    needle = query.strip().lower()
+    matches = [f for f in filings if needle in f.issuer.lower() or needle in f.title.lower()]
+    return json.dumps([f.model_dump() for f in matches], ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def download_brvm_filing(pdf_url: str) -> str:
+    """
+    Download a filing PDF found via get_brvm_filings or search_brvm_filings
+    to local disk, so it can be read (e.g. with a PDF-reading tool).
+
+    Only accepts URLs on sikafinance.com — pass a pdf_url exactly as
+    returned by those two tools, not an arbitrary link.
+
+    Args:
+        pdf_url: The filing's pdf_url field from get_brvm_filings/search_brvm_filings.
+
+    Returns a JSON object with the local file path and size in bytes.
+    """
+    assert sika_scraper
+    dest_dir = Path.home() / ".cache" / "brvm-mcp" / "filings"
+    try:
+        local_path = await sika_scraper.download_filing(pdf_url, str(dest_dir))
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    size = Path(local_path).stat().st_size
+    return json.dumps({"path": local_path, "size_bytes": size}, ensure_ascii=False, indent=2)
 
 
 # ── Resources ────────────────────────────────────────────────────
