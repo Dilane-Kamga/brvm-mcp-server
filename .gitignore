@@ -15,3 +15,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Local Claude Code settings (per machine, not part of the project)
+.claude/settings.local.json
