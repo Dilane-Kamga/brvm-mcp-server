@@ -12,3 +12,6 @@ build/
 .pytest_cache/
 *.log
 .cache/
+
+# macOS
+.DS_Store

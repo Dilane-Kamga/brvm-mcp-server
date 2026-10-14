@@ -1,23 +1,38 @@
 """
 BRVM Web Scraper
 ================
-Scrapes market data from publicly available BRVM data sources.
+Scrapes market data straight from the exchange's own site, brvm.org:
 
-Primary source: afx.kwayisi.org/brvm/ (structured HTML, reliable)
-Fallback: brvm.org (official, but less scrapable)
+- Homepage ticker tape + "Activités du marché" widget: same-day price,
+  change %, market cap, transaction value (real-time-ish, dated).
+- Daily "Bulletin Officiel de la Cote" (BOC) PDF: per-stock volume, index
+  YTD %, and the BRVM Principal index — none of which brvm.org's homepage
+  exposes. The BOC itself lags one trading session (published after the
+  next session's data would otherwise be needed), same as any other
+  source we found for these fields — so this is not a freshness problem,
+  it's the nature of the data.
 
-Data is cached locally with configurable TTL to be respectful
-of source servers and to provide fast responses to MCP tool calls.
+Historically this scraper used afx.kwayisi.org as its primary source, with
+brvm.org as an unused "fallback" in name only. kwayisi turned out to lag a
+full session on everything AND to have real uptime problems, so it was
+dropped entirely in favor of consolidating on the official site.
+
+Data is cached locally with configurable TTL to be respectful of source
+servers and to provide fast responses to MCP tool calls.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import httpx
+import pdfplumber
 from bs4 import BeautifulSoup, Tag
 
 from brvm_mcp.models import (
@@ -30,8 +45,37 @@ from brvm_mcp.models import (
 
 logger = logging.getLogger(__name__)
 
-AFX_BASE = "https://afx.kwayisi.org/brvm"
 BRVM_BASE = "https://www.brvm.org"
+BOC_LIST_URL = f"{BRVM_BASE}/fr/bulletins-officiels-de-la-cote"
+BOC_CACHE_TTL = 3600.0  # the BOC only changes once a day; no need to re-download every call
+
+INDEX_NAMES = ("BRVM Composite", "BRVM 30", "BRVM Prestige")
+
+
+@dataclass
+class _BrvmOrgSnapshot:
+    """One parsed brvm.org homepage fetch — the same-day, real-time-ish source."""
+
+    as_of: str
+    # ticker -> (price, change_pct)
+    quotes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # name -> (value, change_pct)
+    indices: dict[str, tuple[float, float]] = field(default_factory=dict)
+    market_cap: float = 0.0
+    total_value: float = 0.0
+
+
+@dataclass
+class _BocSnapshot:
+    """One parsed Bulletin Officiel de la Cote PDF — the lagging, once-a-day source."""
+
+    bulletin_date: str  # as printed in the PDF, e.g. "mardi 15 septembre 2026"
+    # name -> YTD % for the 3 brvm.org-covered indices
+    index_ytd: dict[str, float] = field(default_factory=dict)
+    # BRVM Principal has no brvm.org homepage equivalent at all
+    principal: IndexValue | None = None
+    volumes: dict[str, int] = field(default_factory=dict)  # ticker -> shares traded
+
 
 # Known BRVM tickers mapped to (full_name, country, sector)
 # This acts as a static enrichment layer; the scraper fills in live prices.
@@ -87,7 +131,7 @@ TICKER_REGISTRY: dict[str, tuple[str, str, str]] = {
 
 
 class BRVMScraper:
-    """Async scraper for BRVM market data."""
+    """Async scraper for BRVM market data, sourced entirely from brvm.org."""
 
     MAX_RETRIES = 3
     RETRY_BACKOFF = (1.0, 2.0, 4.0)
@@ -104,11 +148,23 @@ class BRVMScraper:
             },
             follow_redirects=True,
         )
+        self._boc_cache: tuple[float, _BocSnapshot] | None = None
 
     async def _get_with_retry(self, url: str) -> httpx.Response:
-        """GET with exponential backoff on 429/5xx."""
+        """GET with exponential backoff on 429/5xx and connection-level failures
+        (timeout, DNS, refused) — a dead host used to raise straight away."""
+        last_exc: httpx.TransportError | None = None
         for attempt in range(self.MAX_RETRIES):
-            resp = await self._client.get(url)
+            try:
+                resp = await self._client.get(url)
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt < self.MAX_RETRIES - 1:
+                    delay = self.RETRY_BACKOFF[attempt]
+                    logger.warning(f"{type(exc).__name__} on {url}, retrying in {delay}s")
+                    await asyncio.sleep(delay)
+                    continue
+                raise
             if resp.status_code == 429 or resp.status_code >= 500:
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.RETRY_BACKOFF[attempt]
@@ -117,62 +173,182 @@ class BRVMScraper:
                     continue
             resp.raise_for_status()
             return resp
+        if last_exc:
+            raise last_exc
         return resp  # unreachable, but satisfies type checker
 
     async def close(self):
         await self._client.aclose()
 
+    # ── brvm.org homepage (same-day) ────────────────────────────────
+
+    async def _get_brvm_org_homepage(self) -> _BrvmOrgSnapshot:
+        """Fetch and parse brvm.org's homepage: ticker tape, indices, market activity."""
+        resp = await self._get_with_retry(f"{BRVM_BASE}/")
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        as_of = ""
+        date_block = soup.find(id="block-tools-date-maj")
+        if date_block:
+            m = re.search(r"mise à jour\s*:\s*(.+)", date_block.get_text(strip=True), re.IGNORECASE)
+            if m:
+                as_of = m.group(1).strip()
+
+        quotes: dict[str, tuple[float, float]] = {}
+        section = soup.find(id="slide-seance")
+        if section:
+            for item in section.find_all("div", class_="item"):
+                spans = item.find_all("span")
+                if len(spans) < 3:
+                    continue
+                ticker = spans[0].get_text(strip=True)
+                price = self._parse_number(spans[1].get_text(strip=True))
+                change_pct = self._parse_number(spans[2].get_text(strip=True))
+                quotes[ticker] = (price, change_pct)
+
+        indices: dict[str, tuple[float, float]] = {}
+        market_cap = 0.0
+        total_value = 0.0
+        activity_table = soup.find(id="block-tools-activites-marche")
+        activity_table = activity_table.find("table") if activity_table else None
+        if activity_table and isinstance(activity_table, Tag):
+            index_label_map = {
+                "BRVM-C": "BRVM Composite",
+                "BRVM-30": "BRVM 30",
+                "BRVM-PRES": "BRVM Prestige",
+            }
+            for row in activity_table.find_all("tr"):
+                cells = row.find_all("td")
+                if len(cells) < 2:
+                    continue
+                label = cells[0].get_text(strip=True)
+                value = self._parse_number(cells[1].get_text(strip=True))
+                if label in index_label_map:
+                    change_text = cells[2].get_text(strip=True) if len(cells) > 2 else ""
+                    change_pct = self._parse_number(change_text)
+                    indices[index_label_map[label]] = (value, change_pct)
+                elif label == "Valeur des transactions":
+                    total_value = value
+                elif label == "Capitalisation Actions":
+                    market_cap = value
+
+        return _BrvmOrgSnapshot(
+            as_of=as_of,
+            quotes=quotes,
+            indices=indices,
+            market_cap=market_cap,
+            total_value=total_value,
+        )
+
+    # ── Bulletin Officiel de la Cote PDF (lagging, once-a-day) ──────
+
+    async def _get_latest_boc_snapshot(self) -> _BocSnapshot | None:
+        """Download and parse the latest available BOC PDF, cached for an hour."""
+        if self._boc_cache and (time.monotonic() - self._boc_cache[0]) < BOC_CACHE_TTL:
+            return self._boc_cache[1]
+
+        try:
+            list_resp = await self._get_with_retry(BOC_LIST_URL)
+            hrefs = re.findall(r'href="([^"]*boc_(\d{8})_\d+\.pdf)"', list_resp.text)
+            if not hrefs:
+                logger.warning("No BOC PDF links found on bulletins page")
+                return self._boc_cache[1] if self._boc_cache else None
+            pdf_path, _ = max(hrefs, key=lambda h: h[1])
+            pdf_url = pdf_path if pdf_path.startswith("http") else f"{BRVM_BASE}{pdf_path}"
+
+            pdf_resp = await self._get_with_retry(pdf_url)
+            snapshot = self._parse_boc_pdf(pdf_resp.content)
+            self._boc_cache = (time.monotonic(), snapshot)
+            return snapshot
+        except Exception:
+            logger.warning("Failed to fetch/parse latest BOC PDF", exc_info=True)
+            return self._boc_cache[1] if self._boc_cache else None
+
+    @staticmethod
+    def _parse_boc_pdf(pdf_bytes: bytes) -> _BocSnapshot:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            page1_text = pdf.pages[0].extract_text() or ""
+
+            bulletin_date = ""
+            date_m = re.search(r"^\S+\s+\d{1,2}\s+\S+\s+\d{4}", page1_text, re.MULTILINE)
+            if date_m:
+                bulletin_date = date_m.group(0).strip()
+
+            index_ytd: dict[str, float] = {}
+            ytd_m = re.search(
+                r"^Variation annuelle\s+(-?[\d,]+)\s*%\s+"
+                r"Variation annuelle\s+(-?[\d,]+)\s*%\s+"
+                r"Variation annuelle\s+(-?[\d,]+)\s*%",
+                page1_text,
+                re.MULTILINE,
+            )
+            if ytd_m:
+                for name, pct in zip(INDEX_NAMES, ytd_m.groups()):
+                    index_ytd[name] = BRVMScraper._parse_number(pct)
+
+            principal = None
+            principal_m = re.search(
+                r"BRVM-PRINCIPAL\s*\(\*\*\)\s*\d+\s+([\d,]+)\s+(-?[\d,]+)\s*%\s+(-?[\d,]+)\s*%",
+                page1_text,
+            )
+            if principal_m:
+                value, change_pct, ytd_pct = (
+                    BRVMScraper._parse_number(g) for g in principal_m.groups()
+                )
+                principal = IndexValue(
+                    name="BRVM Principal",
+                    value=value,
+                    change_pct=change_pct,
+                    ytd_change_pct=ytd_pct,
+                    as_of=bulletin_date,
+                )
+
+            volumes: dict[str, int] = {}
+            for page in pdf.pages:
+                for table in page.extract_tables():
+                    for row in table:
+                        if len(row) < 9:
+                            continue
+                        ticker = (row[1] or "").strip()
+                        if ticker not in TICKER_REGISTRY:
+                            continue
+                        volumes[ticker] = int(BRVMScraper._parse_number(row[8] or ""))
+
+        return _BocSnapshot(
+            bulletin_date=bulletin_date,
+            index_ytd=index_ytd,
+            principal=principal,
+            volumes=volumes,
+        )
+
     # ── Live Quotes ──────────────────────────────────────────────
 
     async def get_all_quotes(self) -> list[StockQuote]:
-        """Scrape all live stock quotes from afx.kwayisi.org/brvm/."""
-        resp = await self._get_with_retry(f"{AFX_BASE}/")
-        soup = BeautifulSoup(resp.text, "lxml")
+        """All ~46 BRVM stock quotes: same-day price/change from brvm.org's
+        ticker tape, volume from the latest BOC PDF (one session behind)."""
+        snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
 
         quotes: list[StockQuote] = []
-
-        # The stock table is inside <div class="t"> with columns:
-        # Ticker | Name | Volume | Price | Change (absolute)
-        wrapper = soup.find("div", class_="t")
-        table = wrapper.find("table") if wrapper else None
-        if not table or not isinstance(table, Tag):
-            logger.warning("Could not find shares table on afx page")
-            return quotes
-
-        for row in table.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) < 5:
-                continue
-
-            ticker_tag = cells[0].find("a")
-            ticker = ticker_tag.get_text(strip=True) if ticker_tag else cells[0].get_text(strip=True)
-            name_raw = cells[1].get_text(strip=True)
-
-            volume = int(self._parse_number(cells[2].get_text(strip=True)))
-            price = self._parse_number(cells[3].get_text(strip=True))
-            change_abs = self._parse_number(cells[4].get_text(strip=True))
-
-            previous_close = price - change_abs
-            change_pct = round((change_abs / previous_close) * 100, 2) if previous_close else 0.0
-
-            registry_info = TICKER_REGISTRY.get(ticker, (name_raw, "", ""))
-
+        for ticker, (price, change_pct) in snapshot.quotes.items():
+            registry_info = TICKER_REGISTRY.get(ticker, (ticker, "", ""))
+            previous_close = price / (1 + change_pct / 100) if change_pct != -100 else price
             quotes.append(
                 StockQuote(
                     ticker=ticker,
-                    name=registry_info[0] or name_raw,
+                    name=registry_info[0],
                     price=price,
-                    change=change_abs,
+                    change=round(price - previous_close, 2),
                     change_pct=change_pct,
-                    volume=volume,
+                    volume=boc.volumes.get(ticker, 0) if boc else 0,
                     previous_close=round(previous_close, 2),
                     country=registry_info[1],
                     sector=registry_info[2],
-                    as_of=datetime.now().isoformat(timespec="minutes"),
+                    as_of=snapshot.as_of or datetime.now().isoformat(timespec="minutes"),
                 )
             )
 
-        logger.info(f"Scraped {len(quotes)} quotes from AFX")
+        logger.info(f"Scraped {len(quotes)} quotes from brvm.org")
         return quotes
 
     async def get_quote(self, ticker: str) -> StockQuote | None:
@@ -184,61 +360,26 @@ class BRVMScraper:
     # ── Indices ──────────────────────────────────────────────────
 
     async def get_indices(self) -> list[IndexValue]:
-        """Scrape current BRVM index values."""
-        resp = await self._get_with_retry(f"{AFX_BASE}/")
-        soup = BeautifulSoup(resp.text, "lxml")
-        now = datetime.now().isoformat(timespec="minutes")
+        """BRVM Composite/30/Prestige same-day from brvm.org (YTD from the BOC
+        PDF); BRVM Principal entirely from the BOC PDF (no homepage widget)."""
+        snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
 
         indices: list[IndexValue] = []
-
-        # 1) BRVM-CI from the summary table at top:
-        #    <th>BRVM-CI Index | Year-to-Date | Market Cap.
-        #    <td>402.59 (+0.59) | +56.84 (16.44%) | XOF 15.51Tr
-        for table in soup.find_all("table"):
-            th = table.find("th")
-            if th and "BRVM-CI" in th.get_text():
-                cells = table.find_all("td")
-                if len(cells) >= 2:
-                    ci_text = cells[0].get_text(strip=True)
-                    ytd_text = cells[1].get_text(strip=True)
-                    val_m = re.match(r"([\d.,]+)", ci_text)
-                    chg_m = re.search(r"\(([+-]?[\d.,]+)\)", ci_text)
-                    ytd_m = re.search(r"\(([\d.,]+)%\)", ytd_text)
-                    if val_m:
-                        value = self._parse_number(val_m.group(1))
-                        change = self._parse_number(chg_m.group(1)) if chg_m else 0.0
-                        change_pct = round((change / (value - change)) * 100, 2) if (value - change) else 0.0
-                        ytd_pct = self._parse_number(ytd_m.group(1)) if ytd_m else None
-                        indices.append(IndexValue(
-                            name="BRVM Composite",
-                            value=value,
-                            change=change,
-                            change_pct=change_pct,
-                            ytd_change_pct=ytd_pct,
-                            as_of=now,
-                        ))
-                break
-
-        # 2) Other indices from the trading summary paragraph:
-        #    "BRVM 30 (+0.17%; +1.3% 1WK; +14.18% YTD)"
-        full_text = soup.get_text()
-        other_patterns = [
-            ("BRVM 30", r"BRVM\s*30\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
-            ("BRVM Prestige", r"BRVM\s*Prestige\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
-            ("BRVM Principal", r"BRVM\s*Principal\s*\(([+-]?[\d.,]+)%.*?([\d.,]+)%\s*YTD\)"),
-        ]
-        for name, pattern in other_patterns:
-            m = re.search(pattern, full_text, re.IGNORECASE)
-            if m:
-                change_pct = self._parse_number(m.group(1))
-                ytd_pct = self._parse_number(m.group(2))
-                indices.append(IndexValue(
+        for name in INDEX_NAMES:
+            value, change_pct = snapshot.indices.get(name, (0.0, 0.0))
+            indices.append(
+                IndexValue(
                     name=name,
-                    value=0.0,
+                    value=value,
                     change_pct=change_pct,
-                    ytd_change_pct=ytd_pct,
-                    as_of=now,
-                ))
+                    ytd_change_pct=boc.index_ytd.get(name) if boc else None,
+                    as_of=snapshot.as_of,
+                )
+            )
+
+        if boc and boc.principal:
+            indices.append(boc.principal)
 
         logger.info(f"Scraped {len(indices)} indices")
         return indices
@@ -247,42 +388,20 @@ class BRVMScraper:
 
     async def get_market_summary(self) -> MarketSummary:
         """Build a full market summary from scraped data."""
-        resp = await self._get_with_retry(f"{AFX_BASE}/")
-        soup = BeautifulSoup(resp.text, "lxml")
-
         quotes = await self.get_all_quotes()
         indices = await self.get_indices()
+        snapshot = await self._get_brvm_org_homepage()
 
         gainers = [q for q in quotes if q.change_pct > 0]
         losers = [q for q in quotes if q.change_pct < 0]
         unchanged = [q for q in quotes if q.change_pct == 0]
-
-        # Parse market cap from the summary table ("XOF 15.51Tr")
-        market_cap = 0.0
-        for table in soup.find_all("table"):
-            th = table.find("th")
-            if th and "BRVM-CI" in th.get_text():
-                cells = table.find_all("td")
-                if len(cells) >= 3:
-                    cap_text = cells[2].get_text(strip=True)
-                    cap_m = re.search(r"([\d.,]+)\s*Tr", cap_text)
-                    if cap_m:
-                        market_cap = self._parse_number(cap_m.group(1)) * 1e12
-                break
-
-        # Parse total volume/value from trading summary paragraph
-        full_text = soup.get_text()
         total_volume = sum(q.volume for q in quotes)
-        total_value = 0.0
-        val_m = re.search(r"XOF\s*([\d,. ]+)", full_text)
-        if val_m:
-            total_value = self._parse_number(val_m.group(1))
 
         return MarketSummary(
             date=datetime.now().strftime("%Y-%m-%d"),
             total_volume=total_volume,
-            total_value=total_value,
-            market_cap=market_cap,
+            total_value=snapshot.total_value,
+            market_cap=snapshot.market_cap,
             gainers=len(gainers),
             losers=len(losers),
             unchanged=len(unchanged),
