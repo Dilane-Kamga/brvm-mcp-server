@@ -1,0 +1,42 @@
+name: New data source
+description: Propose a website or feed the server could read from
+labels: ["data-source"]
+body:
+  - type: input
+    id: url
+    attributes:
+      label: Source
+      placeholder: https://www.example.com/marches/
+    validations:
+      required: true
+  - type: textarea
+    id: fields
+    attributes:
+      label: What it adds
+      description: Which fields does it have that brvm.org, the BOC and Sikafinance do not?
+    validations:
+      required: true
+  - type: textarea
+    id: rules
+    attributes:
+      label: Is it allowed?
+      description: Paste the relevant lines of its robots.txt, and link its terms of use if it has any.
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access
+      options:
+        - Public page, no account
+        - Free account required
+        - Paid account required
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checks
+      options:
+        - label: The paths I would read are not under `Disallow` in robots.txt
+          required: true
