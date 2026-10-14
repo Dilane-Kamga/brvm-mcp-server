@@ -341,6 +341,7 @@ class BRVMScraper:
                     change=round(price - previous_close, 2),
                     change_pct=change_pct,
                     volume=boc.volumes.get(ticker, 0) if boc else 0,
+                    volume_as_of=boc.bulletin_date if boc else "",
                     previous_close=round(previous_close, 2),
                     country=registry_info[1],
                     sector=registry_info[2],
@@ -391,6 +392,7 @@ class BRVMScraper:
         quotes = await self.get_all_quotes()
         indices = await self.get_indices()
         snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
 
         gainers = [q for q in quotes if q.change_pct > 0]
         losers = [q for q in quotes if q.change_pct < 0]
@@ -400,6 +402,7 @@ class BRVMScraper:
         return MarketSummary(
             date=datetime.now().strftime("%Y-%m-%d"),
             total_volume=total_volume,
+            volume_as_of=boc.bulletin_date if boc else "",
             total_value=snapshot.total_value,
             market_cap=snapshot.market_cap,
             gainers=len(gainers),

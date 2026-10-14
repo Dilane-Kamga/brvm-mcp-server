@@ -101,3 +101,64 @@ class TestSearchStocks:
         # Empty search returns all
         assert len(results) == len(TICKER_REGISTRY)
         await scraper.close()
+
+
+class TestVolumeAsOf:
+    """Test that volume_as_of is populated from BOC snapshot in MarketSummary and StockQuote."""
+
+    def test_models_have_volume_as_of_field(self):
+        from brvm_mcp.models import MarketSummary, StockQuote
+
+        quote = StockQuote(
+            ticker="SNTS",
+            name="Sonatel",
+            price=15000.0,
+            volume=500,
+            volume_as_of="mardi 13 octobre 2026",
+        )
+        assert quote.volume_as_of == "mardi 13 octobre 2026"
+
+        summary = MarketSummary(
+            date="2026-10-14",
+            total_volume=12000,
+            volume_as_of="mardi 13 octobre 2026",
+            total_value=500000000.0,
+            market_cap=9000000000.0,
+        )
+        assert summary.volume_as_of == "mardi 13 octobre 2026"
+
+    @pytest.mark.asyncio
+    async def test_get_market_summary_populates_volume_as_of(self):
+        from unittest.mock import AsyncMock
+
+        from brvm_mcp.scrapers import _BocSnapshot, _BrvmOrgSnapshot
+
+        scraper = BRVMScraper()
+        boc_mock = _BocSnapshot(
+            bulletin_date="13/10/2026",
+            index_ytd={},
+            principal=None,
+            volumes={"SNTS": 100},
+        )
+        homepage_mock = _BrvmOrgSnapshot(
+            as_of="14/10/2026 - 15:00",
+            quotes={"SNTS": (15000.0, 1.5)},
+            indices={},
+            market_cap=1000000.0,
+            total_value=50000.0,
+        )
+
+        scraper._get_brvm_org_homepage = AsyncMock(return_value=homepage_mock)
+        scraper._get_latest_boc_snapshot = AsyncMock(return_value=boc_mock)
+
+        try:
+            summary = await scraper.get_market_summary()
+            assert summary.volume_as_of == "13/10/2026"
+            assert summary.total_volume == 100
+
+            quotes = await scraper.get_all_quotes()
+            assert len(quotes) == 1
+            assert quotes[0].volume_as_of == "13/10/2026"
+            assert quotes[0].volume == 100
+        finally:
+            await scraper.close()
