@@ -323,12 +323,11 @@ class BRVMScraper:
 
     # ── Live Quotes ──────────────────────────────────────────────
 
-    async def get_all_quotes(self) -> list[StockQuote]:
-        """All ~46 BRVM stock quotes: same-day price/change from brvm.org's
-        ticker tape, volume from the latest BOC PDF (one session behind)."""
-        snapshot = await self._get_brvm_org_homepage()
-        boc = await self._get_latest_boc_snapshot()
-
+    @staticmethod
+    def _build_quotes(
+        snapshot: _BrvmOrgSnapshot, boc: _BocSnapshot | None
+    ) -> list[StockQuote]:
+        """Build StockQuote objects from homepage snapshot and optional BOC snapshot."""
         quotes: list[StockQuote] = []
         for ticker, (price, change_pct) in snapshot.quotes.items():
             registry_info = TICKER_REGISTRY.get(ticker, (ticker, "", ""))
@@ -351,6 +350,13 @@ class BRVMScraper:
         logger.info(f"Scraped {len(quotes)} quotes from brvm.org")
         return quotes
 
+    async def get_all_quotes(self) -> list[StockQuote]:
+        """All ~46 BRVM stock quotes: same-day price/change from brvm.org's
+        ticker tape, volume from the latest BOC PDF (one session behind)."""
+        snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
+        return self._build_quotes(snapshot, boc)
+
     async def get_quote(self, ticker: str) -> StockQuote | None:
         """Get a single stock quote by ticker."""
         ticker = ticker.upper().strip()
@@ -359,12 +365,11 @@ class BRVMScraper:
 
     # ── Indices ──────────────────────────────────────────────────
 
-    async def get_indices(self) -> list[IndexValue]:
-        """BRVM Composite/30/Prestige same-day from brvm.org (YTD from the BOC
-        PDF); BRVM Principal entirely from the BOC PDF (no homepage widget)."""
-        snapshot = await self._get_brvm_org_homepage()
-        boc = await self._get_latest_boc_snapshot()
-
+    @staticmethod
+    def _build_indices(
+        snapshot: _BrvmOrgSnapshot, boc: _BocSnapshot | None
+    ) -> list[IndexValue]:
+        """Build IndexValue objects from homepage snapshot and optional BOC snapshot."""
         indices: list[IndexValue] = []
         for name in INDEX_NAMES:
             value, change_pct = snapshot.indices.get(name, (0.0, 0.0))
@@ -384,13 +389,21 @@ class BRVMScraper:
         logger.info(f"Scraped {len(indices)} indices")
         return indices
 
+    async def get_indices(self) -> list[IndexValue]:
+        """BRVM Composite/30/Prestige same-day from brvm.org (YTD from the BOC
+        PDF); BRVM Principal entirely from the BOC PDF (no homepage widget)."""
+        snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
+        return self._build_indices(snapshot, boc)
+
     # ── Market Summary ───────────────────────────────────────────
 
     async def get_market_summary(self) -> MarketSummary:
-        """Build a full market summary from scraped data."""
-        quotes = await self.get_all_quotes()
-        indices = await self.get_indices()
+        """Build a full market summary from scraped data with a single homepage fetch."""
         snapshot = await self._get_brvm_org_homepage()
+        boc = await self._get_latest_boc_snapshot()
+        quotes = self._build_quotes(snapshot, boc)
+        indices = self._build_indices(snapshot, boc)
 
         gainers = [q for q in quotes if q.change_pct > 0]
         losers = [q for q in quotes if q.change_pct < 0]
