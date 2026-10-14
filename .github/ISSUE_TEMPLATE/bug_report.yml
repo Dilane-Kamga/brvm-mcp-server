@@ -1,0 +1,39 @@
+name: Bug report
+description: A tool returns wrong data, an error, or crashes
+labels: ["bug"]
+body:
+  - type: input
+    id: tool
+    attributes:
+      label: Tool
+      description: Which tool, with which arguments?
+      placeholder: get_stock_price(ticker="SNTS")
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Paste the JSON the tool returned, or the error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: If a value is wrong, say where you saw the right one (a brvm.org page, the BOC of a given date).
+    validations:
+      required: true
+  - type: input
+    id: when
+    attributes:
+      label: When
+      description: Date and time of the call, with the time zone. Market data changes during the day.
+      placeholder: 2026-10-14 15:06 GMT
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit hash or release, and the MCP client (Claude Desktop, MCP Inspector, ...).

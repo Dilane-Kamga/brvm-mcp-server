@@ -1,0 +1,25 @@
+name: New tool
+description: Propose a new MCP tool
+labels: ["enhancement"]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Tool name and arguments
+      placeholder: get_ohlcv(ticker, start, end)
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: The question it answers
+      description: What would a user ask an agent that the agent cannot answer today?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Where the data comes from
+      description: Which page or file, and is it already one of the project's sources?
+    validations:
+      required: true

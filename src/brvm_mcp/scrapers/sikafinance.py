@@ -72,7 +72,7 @@ class SikaFinanceScraper:
             headers={
                 "User-Agent": (
                     "BRVM-MCP-Server/0.1 "
-                    "(+https://github.com/dilanefk/brvm-mcp-server; research use)"
+                    "(+https://github.com/Dilane-Kamga/brvm-mcp-server; research use)"
                 ),
                 "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
             },
@@ -141,9 +141,9 @@ class SikaFinanceScraper:
         spans = container.find_all("span", class_="sp1")
         for span in spans:
             anchor = span.find_next_sibling("a")
-            if not anchor or not anchor.get("href"):
+            href = anchor.get("href") if anchor else None
+            if not anchor or not isinstance(href, str) or not href:
                 continue
-            href = anchor["href"]
             items.append(
                 SikaNewsItem(
                     date=span.get_text(strip=True),
@@ -230,8 +230,9 @@ class SikaFinanceScraper:
 
         dividends: list[SikaDividendEntry] = []
         div_header = soup.find(string=re.compile("DERNIERS DIVIDENDES"))
-        if div_header:
-            div_table = div_header.find_parent().find_next("table", class_="tableVar")
+        div_parent = div_header.find_parent() if div_header else None
+        if div_parent:
+            div_table = div_parent.find_next("table", class_="tableVar")
             if div_table:
                 for row in div_table.select("tbody tr"):
                     cells = row.find_all("td")
@@ -249,15 +250,17 @@ class SikaFinanceScraper:
 
         recent_news: list[SikaNewsItem] = []
         news_header = soup.find(string=re.compile("ACTUALITES"))
-        if news_header:
-            news_block = news_header.find_parent().find_next_sibling("div", class_="home_content")
+        news_parent = news_header.find_parent() if news_header else None
+        if news_parent:
+            news_block = news_parent.find_next_sibling("div", class_="home_content")
             if news_block:
                 recent_news = self._parse_news_block(news_block, SIKA_BASE)
 
         sentiment = None
         consensus_input = soup.select_one("#consensusData")
-        if consensus_input and consensus_input.get("value"):
-            parts = consensus_input["value"].split(";")
+        consensus_value = consensus_input.get("value") if consensus_input else None
+        if isinstance(consensus_value, str) and consensus_value:
+            parts = consensus_value.split(";")
             if len(parts) == 3 and all(p.strip().lstrip("-").isdigit() for p in parts):
                 buy, sell, hold = (int(p) for p in parts)
                 sentiment = SikaSentiment(buy_votes=buy, sell_votes=sell, hold_votes=hold)

@@ -4,7 +4,7 @@
 
 The **first MCP server for the BRVM** (Bourse Régionale des Valeurs Mobilières), the regional stock exchange of 8 West African UEMOA countries. It exposes live market data (quotes, indices, top movers, company info) to any MCP-compatible AI agent via the Model Context Protocol.
 
-This is a **portfolio piece** for an Anthropic Forward Deployed Engineer application — code quality, documentation, and MCP best practices matter as much as functionality.
+Code quality, documentation and MCP best practices matter as much as functionality.
 
 ## Tech stack
 
@@ -24,10 +24,13 @@ src/brvm_mcp/
 ├── __init__.py              # Package version
 ├── server.py                # MCP server entry point (tools, resources, prompts)
 ├── cache.py                 # Disk cache layer
-├── scrapers/__init__.py     # BRVMScraper class — async web scraper
-└── models/__init__.py       # Pydantic models (StockQuote, IndexValue, MarketSummary, etc.)
+├── scrapers/__init__.py     # BRVMScraper: brvm.org homepage + BOC PDF
+├── scrapers/sikafinance.py  # SikaFinanceScraper: ticker pages + news
+└── models/__init__.py       # Pydantic models (StockQuote, IndexValue, MarketSummary, Sika*, etc.)
 tests/
-└── test_brvm.py             # Unit + integration tests
+├── test_brvm.py             # Registry, number parser, search (offline)
+├── test_sikafinance.py      # Sikafinance parsing helpers (offline)
+└── test_stress.py           # Parser resilience (offline), concurrency (live), HTTP load (stress)
 ```
 
 ## Key commands
@@ -36,10 +39,12 @@ tests/
 uv sync                                    # Install dependencies
 uv run brvm-mcp                            # Run server (stdio transport, for Claude Desktop)
 uv run brvm-mcp --transport streamable-http --port 8000  # Run server (HTTP transport)
-uv run pytest                              # Run tests
+uv run pytest                              # Run offline tests (what CI runs)
+uv run pytest -m live                      # Tests that call brvm.org / sikafinance.com
+uv run pytest -m stress                    # Local HTTP server load tests
 uv run pytest -x -v                        # Run tests, stop on first failure
 npx @modelcontextprotocol/inspector uv run brvm-mcp      # Test with MCP Inspector
-uv run ruff check src/                     # Lint
+uv run ruff check src/ tests/              # Lint
 uv run mypy src/                           # Type check
 ```
 
@@ -86,7 +91,7 @@ independent coverage of the same story.
 
 ## MCP design decisions
 
-- **7 tools**, under Anthropic's recommended limit of 20 per server
+- **9 tools**, under Anthropic's recommended limit of 20 per server
 - Tools return **JSON strings** (not raw dicts) because FastMCP serializes tool outputs as text
 - **Lifespan pattern** for scraper/cache initialization and cleanup
 - **Cache layer** sits between tools and scraper to avoid re-scraping on rapid tool calls
@@ -110,7 +115,7 @@ independent coverage of the same story.
 - Number parsing must handle French formatting: `1 234,56` (space thousands separator, comma decimal)
 - Non-breaking spaces (`\xa0`) are common in French financial data
 - The scraper should never crash on unexpected HTML/PDF — return empty results and log warnings
-- Test with real network calls, then add VCR cassettes for offline CI
+- Test with real network calls (mark them `@pytest.mark.live`), then add VCR cassettes for offline CI
 - The BOC PDF's per-stock table is parsed via `pdfplumber.extract_tables()`, not raw
   text — the sector-code column wraps to its own line in plain text extraction, which
   breaks naive regex parsing; structured table extraction handles it correctly
