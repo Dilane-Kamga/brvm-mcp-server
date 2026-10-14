@@ -101,3 +101,46 @@ class TestSearchStocks:
         # Empty search returns all
         assert len(results) == len(TICKER_REGISTRY)
         await scraper.close()
+
+
+class TestMarketSummarySingleFetch:
+    """Verify get_market_summary fetches the homepage exactly once (Issue #5)."""
+
+    @pytest.mark.asyncio
+    async def test_get_market_summary_fetches_homepage_once(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        scraper = BRVMScraper()
+        mock_resp = MagicMock()
+        mock_resp.text = """
+        <html><body>
+          <div id="block-tools-date-maj">Mise à jour : 14/10/2026 15:30</div>
+          <div id="slide-seance">
+            <div class="item"><span>SNTS</span><span>15 000</span><span>+1.5%</span></div>
+            <div class="item"><span>ORAC</span><span>10 000</span><span>-0.5%</span></div>
+          </div>
+          <div id="block-tools-activites-marche">
+            <table>
+              <tr><td>BRVM-C</td><td>230.5</td><td>+0.4%</td></tr>
+              <tr><td>Capitalisation Actions</td><td>8 500 000 000</td></tr>
+              <tr><td>Valeur des transactions</td><td>450 000 000</td></tr>
+            </table>
+          </div>
+        </body></html>
+        """
+        mock_get = AsyncMock(return_value=mock_resp)
+        with patch.object(scraper, "_get_with_retry", mock_get), patch.object(
+            scraper, "_get_latest_boc_snapshot", AsyncMock(return_value=None)
+        ):
+            summary = await scraper.get_market_summary()
+            assert summary.total_value == 450000000.0
+            assert summary.market_cap == 8500000000.0
+            assert summary.gainers == 1
+            assert summary.losers == 1
+            assert len(summary.indices) == 3
+            # Exactly one request to the homepage
+            assert mock_get.call_count == 1
+            assert "https://www.brvm.org/" in mock_get.call_args[0][0]
+
+        await scraper.close()
+
