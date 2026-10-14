@@ -34,7 +34,8 @@ class StockQuote(BaseModel):
     price: float = Field(..., description="Last traded price in XOF")
     change: float = Field(0.0, description="Absolute price change vs previous close")
     change_pct: float = Field(0.0, description="Percentage change vs previous close")
-    volume: int = Field(0, description="Number of shares traded")
+    volume: int = Field(0, description="Shares traded in the latest Official Bulletin (BOC)")
+    volume_as_of: str = Field("", description="Date of volume data from the BOC")
     value_traded: float = Field(0.0, description="Total value traded in XOF")
     previous_close: float = Field(0.0, description="Previous session closing price")
     market_cap: float | None = Field(None, description="Market capitalization in XOF")
@@ -58,7 +59,8 @@ class MarketSummary(BaseModel):
     """Aggregate BRVM trading session summary."""
 
     date: str = Field(..., description="Trading date")
-    total_volume: int = Field(0, description="Total shares traded")
+    total_volume: int = Field(0, description="Total shares traded in the latest BOC")
+    volume_as_of: str = Field("", description="Date of total_volume data from the BOC")
     total_value: float = Field(0.0, description="Total value traded in XOF")
     market_cap: float = Field(0.0, description="Total market capitalization in XOF")
     gainers: int = Field(0, description="Number of stocks that gained")

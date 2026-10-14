@@ -91,6 +91,10 @@ async def get_market_summary() -> str:
     Get today's BRVM market summary including total volume, value traded,
     number of gainers/losers, and all index values.
 
+    Note: Value traded, market cap, and index levels reflect same-day data from
+    brvm.org, while total_volume reflects the most recent Official Bulletin
+    (BOC) PDF, indicated by the 'volume_as_of' field.
+
     Returns a JSON object with the full trading session overview.
     """
     assert scraper and cache
@@ -115,6 +119,8 @@ async def get_stock_price(ticker: str) -> str:
                 ETIT for Ecobank Transnational, ORAC for Orange CI, ONTBF for Onatel).
 
     Returns a JSON object with price, change, volume, and company details.
+    Note: Price and change reflect same-day data from brvm.org, while volume
+    reflects the most recent Official Bulletin (BOC) PDF, indicated by 'volume_as_of'.
     """
     assert scraper and cache
     ticker = ticker.upper().strip()
