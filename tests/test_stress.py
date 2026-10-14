@@ -8,9 +8,11 @@ import pytest
 
 from brvm_mcp.scrapers import BRVMScraper
 
+MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 
 # ── 1. Scraper Concurrency ──────────────────────────────────────
 
+@pytest.mark.live
 class TestScraperConcurrency:
     """Blast the scraper with concurrent calls to test stability."""
 
@@ -124,7 +126,9 @@ class TestParserResilience:
         ("\t100\n", 100.0),
     ]
 
-    @pytest.mark.parametrize("text,expected", EDGE_CASES, ids=[c[0][:20] or "empty" for c in EDGE_CASES])
+    @pytest.mark.parametrize(
+        "text,expected", EDGE_CASES, ids=[c[0][:20] or "empty" for c in EDGE_CASES]
+    )
     def test_parse_number_edge_cases(self, text, expected):
         result = BRVMScraper._parse_number(text)
         assert result == expected, f"_parse_number({text!r}) = {result}, expected {expected}"
@@ -146,7 +150,7 @@ class TestParserResilience:
 
     def test_html_missing_table(self):
         """Scraper should return empty list if no stock table found."""
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         async def _run():
             scraper = BRVMScraper()
@@ -164,7 +168,7 @@ class TestParserResilience:
     def test_html_malformed_cells(self):
         """Scraper should skip ticker-tape items with too few fields, and
         tolerate garbage numeric text by parsing it as 0 rather than crashing."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         html = """<html><body>
         <section id="slide-seance">
@@ -180,7 +184,9 @@ class TestParserResilience:
             mock_resp.text = html
             with patch.object(scraper, "_get_with_retry", return_value=mock_resp):
                 quotes = await scraper.get_all_quotes()
-                assert len(quotes) == 2, f"Expected 2 quotes (ONLY has too few fields), got {len(quotes)}"
+                assert len(quotes) == 2, (
+                    f"Expected 2 quotes (ONLY has too few fields), got {len(quotes)}"
+                )
                 good = [q for q in quotes if q.ticker == "GOOD"]
                 assert len(good) == 1
                 assert good[0].price == 500.0
@@ -192,6 +198,7 @@ class TestParserResilience:
 
 # ── 3. MCP HTTP Server Load ─────────────────────────────────────
 
+@pytest.mark.stress
 class TestMCPServerLoad:
     """Spin up the HTTP server and blast it with requests."""
 
@@ -218,19 +225,20 @@ class TestMCPServerLoad:
                             "clientInfo": {"name": "probe", "version": "1.0"},
                         },
                     },
-                    headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+                    headers=MCP_HEADERS,
                     timeout=2.0,
                 )
                 if resp.status_code < 500:
                     break
-            except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout):
+            except httpx.TransportError:  # not up yet: refused, reset or timed out
                 time.sleep(0.5)
         yield
         self.proc.terminate()
         self.proc.wait(timeout=5)
 
     def test_concurrent_http_requests(self):
-        """Send 20 concurrent requests — single-worker uvicorn won't handle all, but shouldn't crash."""
+        """Send 20 concurrent requests: a single-worker uvicorn won't serve all of them,
+        but it must not crash."""
         async def _blast():
             async with httpx.AsyncClient(timeout=30.0) as client:
                 tasks = []
@@ -247,10 +255,12 @@ class TestMCPServerLoad:
                                 "clientInfo": {"name": "stress-test", "version": "1.0"},
                             },
                         },
-                        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+                        headers=MCP_HEADERS,
                     ))
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                successes = [r for r in results if not isinstance(r, Exception) and r.status_code < 500]
+                successes = [
+                    r for r in results if not isinstance(r, Exception) and r.status_code < 500
+                ]
                 errors = [r for r in results if isinstance(r, Exception)]
                 print(f"\n  20 concurrent HTTP init: {len(successes)} ok, {len(errors)} errors")
                 assert len(successes) >= 5, f"Server couldn't handle any load: {len(successes)}/20"
@@ -273,7 +283,7 @@ class TestMCPServerLoad:
                         "clientInfo": {"name": "stress-test", "version": "1.0"},
                     },
                 },
-                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+                headers=MCP_HEADERS,
                 timeout=15.0,
             )
             assert resp.status_code < 500

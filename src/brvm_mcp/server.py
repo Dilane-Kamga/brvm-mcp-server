@@ -24,8 +24,8 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from mcp.server.fastmcp import FastMCP
 
@@ -126,7 +126,10 @@ async def get_stock_price(ticker: str) -> str:
     quote = await scraper.get_quote(ticker)
     if not quote:
         return json.dumps(
-            {"error": f"Ticker '{ticker}' not found on BRVM. Use search_stocks to find valid tickers."}
+            {
+                "error": f"Ticker '{ticker}' not found on BRVM. "
+                "Use search_stocks to find valid tickers."
+            }
         )
 
     data = quote.model_dump()
@@ -195,7 +198,10 @@ async def get_company_info(ticker: str) -> str:
     info = await scraper.get_company_info(ticker)
     if not info:
         return json.dumps(
-            {"error": f"Company '{ticker}' not found. Use search_stocks to browse available companies."}
+            {
+                "error": f"Company '{ticker}' not found. "
+                "Use search_stocks to browse available companies."
+            }
         )
     return json.dumps(info.model_dump(), ensure_ascii=False, indent=2)
 

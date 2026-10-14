@@ -51,3 +51,22 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["diskcache", "diskcache.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `live` tests call brvm.org or sikafinance.com; `stress` tests start a local HTTP server and
+# are timing-sensitive. Both are skipped by default, so a plain `uv run pytest` (and CI) never
+# loads the sources. Run them on purpose: `uv run pytest -m live`, `uv run pytest -m stress`.
+addopts = "-m 'not live and not stress'"
+markers = [
+    "live: calls a real data source over the network (brvm.org, sikafinance.com)",
+    "stress: starts a local MCP HTTP server and loads it; slow and timing-sensitive",
+]

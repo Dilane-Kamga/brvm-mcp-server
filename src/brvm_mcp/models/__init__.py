@@ -1,12 +1,11 @@
 """Pydantic models for BRVM market data."""
 
-from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
-class Country(str, Enum):
+class Country(StrEnum):
     BENIN = "Bénin"
     BURKINA_FASO = "Burkina Faso"
     COTE_DIVOIRE = "Côte d'Ivoire"
@@ -17,7 +16,7 @@ class Country(str, Enum):
     TOGO = "Togo"
 
 
-class Sector(str, Enum):
+class Sector(StrEnum):
     AGRICULTURE = "Agriculture"
     DISTRIBUTION = "Distribution"
     FINANCE = "Services Financiers"
@@ -144,6 +143,7 @@ class SikaSentiment(BaseModel):
     sell_votes: int = 0
     hold_votes: int = 0
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def total_votes(self) -> int:
         return self.buy_votes + self.sell_votes + self.hold_votes

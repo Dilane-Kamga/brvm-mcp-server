@@ -142,7 +142,7 @@ class BRVMScraper:
             headers={
                 "User-Agent": (
                     "BRVM-MCP-Server/0.1 "
-                    "(+https://github.com/dilanefk/brvm-mcp-server; research use)"
+                    "(+https://github.com/Dilane-Kamga/brvm-mcp-server; research use)"
                 ),
                 "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
             },
@@ -466,7 +466,11 @@ class BRVMScraper:
         sector_lower = sector.lower()
 
         for ticker, (name, ctry, sect) in TICKER_REGISTRY.items():
-            if query_lower and query_lower not in name.lower() and query_lower not in ticker.lower():
+            if (
+                query_lower
+                and query_lower not in name.lower()
+                and query_lower not in ticker.lower()
+            ):
                 continue
             if country_lower and country_lower not in ctry.lower():
                 continue

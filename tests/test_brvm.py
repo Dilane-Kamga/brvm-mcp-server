@@ -1,6 +1,5 @@
 """Tests for BRVM scraper and MCP tools."""
 
-import json
 
 import pytest
 
